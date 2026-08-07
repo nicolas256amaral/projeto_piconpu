@@ -157,6 +157,7 @@ module axi_interconnect (
 );
 
     localparam RAM_BASE   = 32'h0000_0000;
+    localparam RAM_SIZE   = 32'h0000_4000; // 16 KiB: 0x0000_0000 a 0x0000_3FFF
     localparam GPIO_BASE  = 32'h1000_0000;
     localparam UART_BASE  = 32'h2000_0000;
     localparam SPI_BASE   = 32'h3000_0000;
@@ -164,7 +165,7 @@ module axi_interconnect (
     localparam TIMER_BASE = 32'h5000_0000;
     localparam NPU_BASE   = 32'h6000_0000;
 
-    wire w_sel_ram   = (m_awaddr[31:12] == RAM_BASE[31:12]);
+    wire w_sel_ram   = (m_awaddr >= RAM_BASE) && (m_awaddr < (RAM_BASE + RAM_SIZE));
     wire w_sel_gpio  = (m_awaddr[31:12] == GPIO_BASE[31:12]);
     wire w_sel_uart  = (m_awaddr[31:12] == UART_BASE[31:12]);
     wire w_sel_spi   = (m_awaddr[31:12] == SPI_BASE[31:12]);
@@ -172,7 +173,7 @@ module axi_interconnect (
     wire w_sel_timer = (m_awaddr[31:12] == TIMER_BASE[31:12]);
     wire w_sel_npu   = (m_awaddr[31:12] == NPU_BASE[31:12]);
 
-    wire r_sel_ram   = (m_araddr[31:12] == RAM_BASE[31:12]);
+    wire r_sel_ram   = (m_araddr >= RAM_BASE) && (m_araddr < (RAM_BASE + RAM_SIZE));
     wire r_sel_gpio  = (m_araddr[31:12] == GPIO_BASE[31:12]);
     wire r_sel_uart  = (m_araddr[31:12] == UART_BASE[31:12]);
     wire r_sel_spi   = (m_araddr[31:12] == SPI_BASE[31:12]);

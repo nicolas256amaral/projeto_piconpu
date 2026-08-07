@@ -8,9 +8,9 @@
     localparam CLK_PERIOD = 20ns; // 50 MHz
     localparam CLK_FREQ   = 50_000_000;
 
-    localparam UART_BAUD_RATE  = 9600;
-    localparam UART_BIT_CLKS = CLK_FREQ / UART_BAUD_RATE;
-    localparam UART_BIT_PERIOD_NS = 1_000_000_000 / UART_BAUD_RATE;
+    localparam UART_BAUD_RATE  = 2500000;
+    localparam UART_BIT_CLKS = 20;
+    localparam UART_BIT_PERIOD_NS = 400;
     localparam UART_DATA_BITS = 8;
     localparam string INITIAL_MSG = "SOC IOT PICORV32";
     localparam string MSG_TO_UART = "DD\n";
@@ -40,7 +40,8 @@
         SEND_DATA_TO_SPI     = 8'h42,
         SEND_DATA_TO_I2C     = 8'h43,
         SEND_DATA_TO_UART    = 8'h44,
-        SEND_DATA_TO_TIMER   = 8'h45
+        SEND_DATA_TO_TIMER   = 8'h45,
+        SEND_DATA_TO_NPU     = 8'h46
     } commands;
 
     typedef enum bit [I2C_DATA_BITS-1:0] {

@@ -6,6 +6,7 @@ import uvm_pkg::*;
 
 `include "transaction.sv" 
 `include "soc_macros.svh" 
+`include "npu_predictor.sv" 
 
 // declaração dos sufixos para as analysis port de cada monitor
 `uvm_analysis_imp_decl(_bootloader)
@@ -31,6 +32,22 @@ class soc_scoreboard extends uvm_scoreboard;
     uvm_analysis_imp_i2c #(i2c_transaction, soc_scoreboard) i2c_ap_imp;
 
     uvm_analysis_imp_timer #(timer_transaction, soc_scoreboard) timer_ap_imp;
+
+    // =========================================================================
+    // Instância do Preditivo da NPU e FIFO de espera
+    // =========================================================================
+    npu_predictor predictor;
+    uvm_tlm_analysis_fifo #(bit[31:0]) predictor_fifo;
+
+    int npu_transaction_correct = 0;
+    int npu_transaction_wrong = 0;
+    
+    int npu_payload_count = 0;
+    byte w_buffer[16];
+    byte a_buffer[16];
+    bit receiving_npu_payload = 0;
+
+    // =========================================================================
 
     int bootload_time = 0;
 
@@ -78,27 +95,52 @@ class soc_scoreboard extends uvm_scoreboard;
         spi_ap_miso_imp   = new("spi_ap_miso_imp", this);
         i2c_ap_imp        = new("i2c_ap_imp", this);
         timer_ap_imp      = new("timer_ap_imp", this);
+
+        predictor = npu_predictor::type_id::create("predictor", this);
+        predictor_fifo = new("predictor_fifo", this);
     endfunction : new
+
+    function void connect_phase(uvm_phase phase);
+        super.connect_phase(phase);
+        predictor.ap_expected.connect(predictor_fifo.analysis_export);
+    endfunction
 
     function void write_bootloader(bootloader_transaction item);
         bootload_time = item.clock_cycles;
         `uvm_info("SCOREBOARD", $sformatf("Boot DONE em %0d ciclos", bootload_time), UVM_MEDIUM);
     endfunction
 
-    // UART transaction check - algum dado foi enviado pela uart
+    // UART transaction check - TX intercepta NPU e comandos
     function void write_uart(uart_transaction item_tx);
-        int count = 0;
         uart_transaction_tx_count++;
 
         `uvm_info("SCOREBOARD", $sformatf("UART Transaction sent to DUT #%0d: Data=0x%0h", uart_transaction_tx_count, item_tx.data), UVM_MEDIUM)
         
-        if (item_tx.framing_error)
+        if (!item_tx.framing_error)
         begin
-            errors++;
+            // Logica de Interceptação da NPU
+            if (receiving_npu_payload) begin
+                if (npu_payload_count < 16) w_buffer[npu_payload_count] = item_tx.data;
+                else a_buffer[npu_payload_count - 16] = item_tx.data;
+                
+                npu_payload_count++;
+                if (npu_payload_count == 32) begin
+                    receiving_npu_payload = 0;
+                    predictor.calculate_expected(w_buffer, a_buffer); // Envia para o gabarito
+                end
+            end else begin
+                // Funcionamento Padrão
+                if (item_tx.data == SEND_DATA_TO_NPU) begin
+                    receiving_npu_payload = 1;
+                    npu_payload_count = 0;
+                end else begin
+                    uart_cmd_sent.push_back(item_tx.data);
+                end
+            end
         end
         else
         begin
-            uart_cmd_sent.push_back(item_tx.data);
+            errors++;
         end
     endfunction
     
@@ -140,13 +182,9 @@ class soc_scoreboard extends uvm_scoreboard;
         end
     endfunction
     
-    // SPI transaction check - algum dado foi enviado pela spi
     function void write_spi(spi_transaction item);
-        int count = 0;
         spi_transaction_miso_count++;
-
         `uvm_info("SCOREBOARD", $sformatf("SPI Transaction sent to DUT #%0d: Data=0x%0h", spi_transaction_miso_count, item.data), UVM_MEDIUM)
-        
     endfunction
 
     function void write_i2c(i2c_transaction item);
@@ -190,75 +228,98 @@ class soc_scoreboard extends uvm_scoreboard;
         int count = 0;
         bit first_msg = 1;
 
-        // monitorar mensagens recebidas pela uart
+        bit [31:0] npu_out_word = 0;
+        bit [31:0] npu_expected = 0;
+        int npu_rx_bytes = 0;
+
         forever
         begin
             uart_ap_rx_imp.get(uart_item);
-            get_msg_uart(uart_item);
 
-            // TODO: REFACTOR TO GET INITIAL MESSAGE OR OTHER MESSAGES AT SAME TIME
-            
-            if (first_msg == 1)
-            begin
-                // Receiving initial message
-                 count++;
-
-                if (count >= INITIAL_MSG.len())
-                begin
-                    if (INITIAL_MSG !=  msg_received_uart)
-                    begin
+            // Verifica se tem resultado da NPU aguardando para ser lido
+            if (predictor_fifo.used() > 0 || npu_rx_bytes > 0) begin
+                npu_out_word |= ({24'd0, uart_item.data} << (npu_rx_bytes * 8));
+                npu_rx_bytes++;
+                
+                if (npu_rx_bytes == 4) begin
+                    predictor_fifo.get(npu_expected);
+                    if (npu_out_word == npu_expected) begin
+                        npu_transaction_correct++;
+                        `uvm_info("SCOREBOARD", $sformatf("NPU Match! Exp: 0x%08X, Got: 0x%08X", npu_expected, npu_out_word), UVM_MEDIUM)
+                    end else begin
+                        npu_transaction_wrong++;
                         errors++;
-                        uart_transaction_wrong++;
-                        uart_transaction_rx_count++;
-                        `uvm_info("SCOREBOARD", $sformatf("Expected UART: %s | Received UART: %s", INITIAL_MSG, msg_received_uart), UVM_MEDIUM);
+                        `uvm_error("SCOREBOARD", $sformatf("NPU Error! Exp: 0x%08X, Got: 0x%08X", npu_expected, npu_out_word))
                     end
-                    else
-                    begin
-                        uart_transaction_correct++;
-                        uart_transaction_rx_count++;
-                    end
-                    initial_msg = msg_received_uart;
-                    msg_received_uart = "";
-                    first_msg = 0;
-                    count = 0;
+                    npu_rx_bytes = 0;
+                    npu_out_word = 0;
                 end
-            end
-            else
-            begin
-                count++;
+            end else begin
+                // Funcionamento padrão original para Inicial MSG, SPI, etc.
+                get_msg_uart(uart_item);
 
-                if (count >= MSG_TO_UART.len())
+                if (first_msg == 1)
                 begin
-                    if (MSG_TO_UART !=  msg_received_uart)
+                    // Receiving initial message
+                    count++;
+
+                    if (count >= INITIAL_MSG.len())
                     begin
-                        errors++;
-                        uart_transaction_wrong++;
-                        uart_transaction_rx_count++;
-                        `uvm_info("SCOREBOARD", $sformatf("Esperado UART:%s.", MSG_TO_UART), UVM_MEDIUM);
-                        `uvm_info("SCOREBOARD", $sformatf("Recebido UART:%s.", msg_received_uart), UVM_MEDIUM);
+                        if (INITIAL_MSG !=  msg_received_uart)
+                        begin
+                            errors++;
+                            uart_transaction_wrong++;
+                            uart_transaction_rx_count++;
+                            `uvm_info("SCOREBOARD", $sformatf("Expected UART: %s | Received UART: %s", INITIAL_MSG, msg_received_uart), UVM_MEDIUM);
+                        end
+                        else
+                        begin
+                            uart_transaction_correct++;
+                            uart_transaction_rx_count++;
+                        end
+                        initial_msg = msg_received_uart;
+                        msg_received_uart = "";
+                        first_msg = 0;
+                        count = 0;
                     end
-                    else
-                    begin
-                        uart_transaction_correct++;
-                        uart_transaction_rx_count++;
-                    end
-
-                    count = 0;
-                    msg_received_uart = "";
-                end
-
-                spi_ap_mosi_imp.get(spi_item);
-                spi_transaction_mosi_count++;
-
-                if (MSG_TO_SPI == spi_item.msg_received)
-                begin
-                    spi_transaction_correct++;
                 end
                 else
                 begin
-                    spi_transaction_wrong++;
-                    errors++;
-                    `uvm_info("SCOREBOARD", $sformatf("Expected SPI: 0x%h | Received SPI: 0x%h", MSG_TO_SPI, spi_item.msg_received), UVM_MEDIUM);
+                    count++;
+
+                    if (count >= MSG_TO_UART.len())
+                    begin
+                        if (MSG_TO_UART !=  msg_received_uart)
+                        begin
+                            errors++;
+                            uart_transaction_wrong++;
+                            uart_transaction_rx_count++;
+                            `uvm_info("SCOREBOARD", $sformatf("Esperado UART:%s.", MSG_TO_UART), UVM_MEDIUM);
+                            `uvm_info("SCOREBOARD", $sformatf("Recebido UART:%s.", msg_received_uart), UVM_MEDIUM);
+                        end
+                        else
+                        begin
+                            uart_transaction_correct++;
+                            uart_transaction_rx_count++;
+                        end
+
+                        count = 0;
+                        msg_received_uart = "";
+                    end
+
+                    spi_ap_mosi_imp.get(spi_item);
+                    spi_transaction_mosi_count++;
+
+                    if (MSG_TO_SPI == spi_item.msg_received)
+                    begin
+                        spi_transaction_correct++;
+                    end
+                    else
+                    begin
+                        spi_transaction_wrong++;
+                        errors++;
+                        `uvm_info("SCOREBOARD", $sformatf("Expected SPI: 0x%h | Received SPI: 0x%h", MSG_TO_SPI, spi_item.msg_received), UVM_MEDIUM);
+                    end
                 end
             end
         end
@@ -288,6 +349,9 @@ class soc_scoreboard extends uvm_scoreboard;
         `uvm_info("SCOREBOARD", "===================== Scoreboard Report ====================", UVM_LOW)
         `uvm_info("SCOREBOARD", $sformatf("Bootloader:                      %0d cycles       ", bootload_time), UVM_LOW)
         `uvm_info("SCOREBOARD", $sformatf("Initial message received:        %s               ", initial_msg), UVM_LOW)
+        `uvm_info("SCOREBOARD", "--------------------------- NPU ----------------------------", UVM_LOW)
+        `uvm_info("SCOREBOARD", $sformatf("NPU transaction match:           %0d              ", npu_transaction_correct), UVM_LOW)
+        `uvm_info("SCOREBOARD", $sformatf("NPU transaction mismatch:        %0d              ", npu_transaction_wrong), UVM_LOW)
         `uvm_info("SCOREBOARD", "--------------------------- UART ---------------------------", UVM_LOW)
         `uvm_info("SCOREBOARD", $sformatf("UART write on DUT:               %0d transactions ", uart_transaction_tx_count), UVM_LOW)
         `uvm_info("SCOREBOARD", $sformatf("UART read from DUT:              %0d transactions ", uart_transaction_rx_count), UVM_LOW)
@@ -323,5 +387,3 @@ class soc_scoreboard extends uvm_scoreboard;
 endclass
 
 `endif
-
-

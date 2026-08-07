@@ -1,0 +1,8 @@
+modelsim/
+*.bak
+test/RAM/firmware.bin
+test/RAM/firmware.elf
+vivado/*
+vivado_*
+vivado.*
+*.log

@@ -31,7 +31,7 @@ endclass : bootloader_transaction
 // =============================================================================
 class uart_transaction extends uvm_sequence_item;
     bit [UART_DATA_BITS-1:0]      data;
-    randc commands  data_sent;
+    randc commands data_sent;
     bit framing_error; // 1 se o bit de stop não for 1
     
     `uvm_object_utils_begin(uart_transaction)
@@ -73,7 +73,7 @@ endclass : gpio_transaction
 class spi_transaction extends uvm_sequence_item;
     bit [SPI_DATA_BITS-1:0]      data;
     string msg_received;
-    rand commands  data_sent;
+    rand commands data_sent;
     
     `uvm_object_utils_begin(spi_transaction)
         `uvm_field_int(data, UVM_ALL_ON)

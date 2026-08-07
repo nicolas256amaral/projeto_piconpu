@@ -1,4 +1,10 @@
-module soc_top (
+module soc_top #(
+    // Mantém 115200 baud como padrão para hardware.
+    // A testbench pode sobrescrever BOOT_BAUD_RATE para acelerar a simulação.
+    parameter BOOT_CLK_FREQ  = 50_000_000,
+    parameter BOOT_BAUD_RATE = 115200,
+    parameter BOOT_MEM_WORDS = 1024
+) (
     input  wire        clk,
     input  wire        resetn,
 
@@ -75,7 +81,9 @@ module soc_top (
   wire cpu_resetn;
 
   boot_manager #(
-                 .MEM_WORDS(1024)
+                 .CLK_FREQ (BOOT_CLK_FREQ),
+                 .BAUD_RATE(BOOT_BAUD_RATE),
+                 .MEM_WORDS(BOOT_MEM_WORDS)
                ) boot_mgr (
                  .clk(clk),
                  .resetn(resetn),
@@ -104,7 +112,7 @@ module soc_top (
   // =========================================================================
   picorv32_axi #(
                  .PROGADDR_RESET(32'h00000000),
-                 .STACKADDR     (32'h00001000)
+                 .STACKADDR     (32'h00004000)
                ) cpu (
                  .clk(clk),
                  .resetn(cpu_resetn),
@@ -439,7 +447,10 @@ module soc_top (
                      .timer_rready(timer_rready)
                    );
 
-  axi_ram ram_inst (
+  axi_ram #(
+            .ADDR_WIDTH(14),
+            .DATA_WIDTH(32)
+          ) ram_inst (
             .clk(clk),
             .resetn(resetn),
 

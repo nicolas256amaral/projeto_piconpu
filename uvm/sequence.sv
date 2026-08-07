@@ -181,6 +181,55 @@ endclass : i2c_seq
 // TIMER Sequence - Como não envia dados, não é necessária
 // =============================================================================
 
+// =============================================================================
+// NPU Sequence
+// =============================================================================
+class npu_seq extends uvm_sequence #(uart_transaction);
+    `uvm_object_utils(npu_seq)
+
+    function new(string name = "npu_seq");
+        super.new(name);
+    endfunction
+
+    task body();
+        uart_transaction item;
+        byte w_bytes[16];
+        byte a_bytes[16];
+
+        `uvm_info("NPU SEQUENCE", "Iniciando cálculos de matrizes na NPU...", UVM_LOW)
+
+        for (int iter = 0; iter < 100; iter++) begin
+            item = uart_transaction::type_id::create("item");
+            start_item(item); 
+            item.data_sent = SEND_DATA_TO_NPU; 
+            finish_item(item); 
+            #(10 * UART_BIT_CLKS * CLK_PERIOD);
+
+            for(int i=0; i<16; i++) begin
+                w_bytes[i] = $urandom_range(8, 0) - 4;
+                a_bytes[i] = $urandom_range(8, 0) - 4;
+            end
+
+            for(int i=0; i<16; i++) begin
+                item = uart_transaction::type_id::create("item");
+                start_item(item); item.data_sent = w_bytes[i]; finish_item(item); 
+                #(5 * UART_BIT_CLKS * CLK_PERIOD);
+            end
+
+            for(int i=0; i<16; i++) begin
+                item = uart_transaction::type_id::create("item");
+                start_item(item); item.data_sent = a_bytes[i]; finish_item(item); 
+                #(5 * UART_BIT_CLKS * CLK_PERIOD);
+            end
+
+            // ---> CORREÇÃO AQUI <---
+            // Aguarda 1000 clocks da UART (~30 us) para garantir que a CPU
+            // termine de transmitir os 4 bytes da resposta antes de iniciar a próxima
+            #(1000 * UART_BIT_CLKS * CLK_PERIOD);
+        end
+        `uvm_info("NPU SEQUENCE", "Todos os dados foram enviados para o SoC.", UVM_LOW)
+    endtask
+endclass : npu_seq
 
 // =============================================================================
 // Virtual Sequences - Coordinate multiple protocol agents

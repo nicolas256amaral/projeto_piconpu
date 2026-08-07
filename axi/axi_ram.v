@@ -3,7 +3,7 @@
 // Agora com porta extra para Bootloader
 // =====================================
 module axi_ram #(
-    parameter ADDR_WIDTH = 16,   // 64KB
+    parameter ADDR_WIDTH = 14,   // 16 KiB (2^14 bytes = 4096 palavras de 32 bits)
     parameter DATA_WIDTH = 32
 )(
     input  wire                     clk,

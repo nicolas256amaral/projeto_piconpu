@@ -1,4 +1,6 @@
 module boot_manager #(
+    parameter CLK_FREQ  = 50_000_000,
+    parameter BAUD_RATE = 115200,
     parameter MEM_WORDS = 1024
 )(
     input  wire        clk,
@@ -16,8 +18,8 @@ module boot_manager #(
   wire rom_done;
 
   uart_rom_receiver #(
-      .CLK_FREQ(50_000_000),
-      .BAUD_RATE(115200),
+      .CLK_FREQ(CLK_FREQ),
+      .BAUD_RATE(BAUD_RATE),
       .MEM_WORDS(MEM_WORDS)
   ) rom_receiver_inst (
       .clk(clk),
