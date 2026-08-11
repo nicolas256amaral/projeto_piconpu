@@ -48,6 +48,12 @@ int main(void)
 {
     uint8_t features[TL_K_DIM];
 
+    /*
+     * Carrega o modelo UMA VEZ apos o boot, antes de aguardar a primeira
+     * imagem pela UART. Pesos, bias e parametros permanecem na NPU.
+     */
+    tl_init_model();
+
     for (;;) {
         uint8_t byte;
         uint8_t command;
@@ -102,7 +108,8 @@ int main(void)
             continue;
         }
 
-        tl_last_sample_index = sample_id;
+        // A amostra recebida pela UART já está em 'features'.
+        // Não é mais necessário guardar sample_id em variável global de teste.
         tl_run_features(features);
         uart_send_response(sample_id, UART_RESP_OK);
     }

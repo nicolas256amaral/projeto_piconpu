@@ -222,9 +222,6 @@ class npu_seq extends uvm_sequence #(uart_transaction);
                 #(5 * UART_BIT_CLKS * CLK_PERIOD);
             end
 
-            // ---> CORREÇÃO AQUI <---
-            // Aguarda 1000 clocks da UART (~30 us) para garantir que a CPU
-            // termine de transmitir os 4 bytes da resposta antes de iniciar a próxima
             #(1000 * UART_BIT_CLKS * CLK_PERIOD);
         end
         `uvm_info("NPU SEQUENCE", "Todos os dados foram enviados para o SoC.", UVM_LOW)

@@ -7,11 +7,7 @@ Treina um classificador linear vermelho/verde e exporta:
    - pesos quantizados para a NPU;
    - bias;
    - TL_QUANT_CFG e TL_QUANT_MULT;
-   - nomes das classes.
-
-   O header NÃO incorpora vetores de entrada de teste. As entradas da
-   inferência são geradas externamente a partir de novas imagens e chegam
-   ao firmware pela UART.
+   - opcionalmente, amostras de teste já quantizadas.
 
 2. traffic_light_preprocess.json
    - média e desvio do StandardScaler;
@@ -19,9 +15,9 @@ Treina um classificador linear vermelho/verde e exporta:
    - parâmetros necessários para transformar imagens novas nos mesmos
      63 bytes enviados à NPU pela UART.
 
-A v6 separa explicitamente os parâmetros do modelo dos dados de entrada.
-X_test_int e y_test continuam existindo internamente no script somente para
-validação do treinamento e para a geração opcional de uart_sample.hex.
+A v5 mantém compatibilidade com o firmware usado na integração
+UART -> PicoRV32 -> NPU -> UART, sem colocar os vetores float do
+pré-processamento dentro do firmware por padrão.
 """
 
 from __future__ import annotations
@@ -467,14 +463,13 @@ def train_and_quantize(
 def emit_model_header(
     bundle: ExportBundle,
     out_path: Path,
+    num_samples: int = 8,
     embed_preprocess: bool = False,
 ) -> None:
-    """
-    Gera o header usado pelo firmware.
+    if num_samples < 0:
+        raise ValueError("--samples não pode ser negativo.")
 
-    A partir da v6, este arquivo contém apenas parâmetros permanentes do
-    modelo. Nenhuma amostra de entrada é incorporada ao header.
-    """
+    num_samples = min(num_samples, len(bundle.X_test_int))
     lines: List[str] = []
 
     lines.append("#ifndef TRAFFIC_LIGHT_MODEL_H")
@@ -482,17 +477,17 @@ def emit_model_header(
     lines.append("")
     lines.append("#include <stdint.h>")
     lines.append("")
-    lines.append("// Gerado automaticamente por train_traffic_light_export_v6.py")
-    lines.append("// Contém somente parâmetros do modelo; entradas chegam pela UART.")
+    lines.append("// Gerado automaticamente por train_traffic_light_export_v5.py")
     lines.append(f"// best_C = {bundle.best_C}")
     lines.append(f"// accuracy_float = {bundle.acc_float}")
     lines.append(f"// accuracy_quantized = {bundle.acc_quantized}")
     lines.append(f"// calib_acc_ref_p99 = {bundle.calib_acc_ref}")
-    lines.append("#define TL_NUM_CLASSES 2u")
+    lines.append(f"#define TL_NUM_CLASSES 2u")
     lines.append(f"#define TL_FEATURE_DIM {bundle.feature_dim}u")
     lines.append(f"#define TL_K_DIM {bundle.n_words}u")
     lines.append(f"#define TL_QUANT_CFG  0x{bundle.quant_cfg:08X}u")
     lines.append(f"#define TL_QUANT_MULT 0x{bundle.quant_mult:08X}u")
+    lines.append(f"#define TL_NUM_TEST_SAMPLES {num_samples}u")
     lines.append("")
 
     lines.append("static const int32_t tl_bias[4] = {")
@@ -510,14 +505,37 @@ def emit_model_header(
     lines.append("};")
     lines.append("")
 
-    # Os nomes das classes pertencem à descrição do modelo e podem ser úteis
-    # para ferramentas externas. Diferentemente de tl_inputs, não são amostras.
-    label_names = ", ".join(f'\"{name}\"' for name in CLASS_NAMES)
-    lines.append(
-        "static const char * const tl_class_names[TL_NUM_CLASSES] = "
-        f"{{{label_names}}};"
-    )
-    lines.append("")
+    if num_samples > 0:
+        lines.append(
+            "static const uint32_t tl_inputs[TL_NUM_TEST_SAMPLES][TL_K_DIM] = {"
+        )
+        for sample_index in range(num_samples):
+            lines.append("    {")
+            sample = bundle.X_test_int[sample_index]
+            for k in range(bundle.feature_dim):
+                word = pack_int8([int(sample[k]), 0, 0, 0])
+                comma = "," if k < bundle.feature_dim - 1 else ""
+                lines.append(f"        0x{word:08X}u{comma}")
+            comma_end = "," if sample_index < num_samples - 1 else ""
+            lines.append(f"    }}{comma_end}")
+        lines.append("};")
+        lines.append("")
+
+        label_names = ", ".join(f'\"{name}\"' for name in CLASS_NAMES)
+        lines.append(
+            "static const char * const tl_class_names[TL_NUM_CLASSES] = "
+            f"{{{label_names}}};"
+        )
+        lines.append("")
+
+        lines.append(
+            "static const uint8_t tl_expected_labels[TL_NUM_TEST_SAMPLES] = {"
+        )
+        for index in range(num_samples):
+            comma = "," if index < num_samples - 1 else ""
+            lines.append(f"    {int(bundle.y_test[index])}{comma}")
+        lines.append("};")
+        lines.append("")
 
     if embed_preprocess:
         lines.append("// Parâmetros para pré-processamento em software externo.")
@@ -547,9 +565,10 @@ def emit_model_header(
     out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"\nHeader do modelo gerado em: {out_path}")
 
+
 def emit_preprocess_json(bundle: ExportBundle, out_path: Path) -> None:
     data = {
-        "format_version": 6,
+        "format_version": 5,
         "class_names": CLASS_NAMES,
         "class_to_id": CLASS_TO_ID,
         "image_size": {
@@ -631,6 +650,12 @@ def main() -> None:
         type=Path,
         help="JSON usado pelo programa externo que envia imagens pela UART.",
     )
+    parser.add_argument(
+        "--samples",
+        default=8,
+        type=int,
+        help="Quantidade de amostras de teste embutidas no header. Use 0 no firmware dinâmico.",
+    )
     parser.add_argument("--test-size", default=0.25, type=float)
     parser.add_argument("--random-state", default=42, type=int)
     parser.add_argument(
@@ -665,6 +690,7 @@ def main() -> None:
     emit_model_header(
         bundle,
         args.out,
+        num_samples=args.samples,
         embed_preprocess=args.embed_preprocess,
     )
     emit_preprocess_json(bundle, args.preprocess_out)
@@ -676,6 +702,16 @@ def main() -> None:
             args.uart_sample_index,
         )
 
+    if args.samples > 0:
+        estimated_sample_bytes = args.samples * bundle.feature_dim * 4
+        print(
+            "\nAviso: as amostras embutidas ocupam aproximadamente "
+            f"{estimated_sample_bytes} bytes no header antes das otimizações do linker."
+        )
+        print(
+            "Para o firmware UART dinâmico, prefira --samples 0 e use "
+            "--uart-sample-out para a testbench."
+        )
 
 
 if __name__ == "__main__":

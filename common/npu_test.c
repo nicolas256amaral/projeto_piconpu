@@ -6,8 +6,7 @@ volatile uint32_t tl_out_words[4];
 volatile int32_t  tl_score_red;
 volatile int32_t  tl_score_green;
 volatile uint32_t tl_predicted_label;
-volatile uint32_t tl_expected_label_last;
-volatile uint32_t tl_last_sample_index;
+volatile uint32_t tl_model_initialized;
 
 static int8_t unpack_byte_s8(uint32_t word, uint32_t byte_index)
 {
@@ -22,12 +21,22 @@ static void tl_decode_scores_from_last_row(uint32_t word)
     tl_predicted_label = (tl_score_green > tl_score_red) ? 1u : 0u;
 }
 
-void tl_run_features(const uint8_t features[])
+/*
+ * Carrega na NPU tudo o que pertence ao MODELO e nao muda entre imagens:
+ * configuracao, requantizacao, bias e pesos.
+ *
+ * Esta funcao deve ser chamada uma unica vez apos o boot (ou novamente apenas
+ * se a NPU/modelo for resetado/trocado).
+ */
+void tl_init_model(void)
 {
-    tl_score_red       = 0;
-    tl_score_green     = 0;
-    tl_predicted_label = 0u;
+    tl_model_initialized = 0u;
 
+    /* NPU precisa estar IDLE para aceitar as escritas MMIO. */
+    while ((npu_status() & NPU_STS_BUSY) != 0u) {
+    }
+
+    /* Reinicia os ponteiros de escrita antes da carga inicial do modelo. */
     mmio_write32(NPU_CMD,
                  NPU_CMD_RST_PTRS |
                  NPU_CMD_RST_W_WR |
@@ -45,9 +54,40 @@ void tl_run_features(const uint8_t features[])
 
     for (uint32_t i = 0u; i < TL_K_DIM; i++) {
         npu_write_weight(tl_weights[i]);
+    }
+
+    tl_model_initialized = 1u;
+}
+
+void tl_run_features(const uint8_t features[])
+{
+    tl_score_red       = 0;
+    tl_score_green     = 0;
+    tl_predicted_label = 0u;
+
+    /*
+     * Protecao adicional: no fluxo UART normal, main() chama tl_init_model()
+     * antes de aguardar a primeira imagem. Caso esta funcao seja chamada
+     * diretamente, garante que o modelo esteja carregado.
+     */
+    if (tl_model_initialized == 0u) {
+        tl_init_model();
+    }
+
+    /*
+     * Nova imagem: preserva pesos/bias/configuracoes e reinicia SOMENTE o
+     * ponteiro de escrita da RAM de entradas.
+     */
+    mmio_write32(NPU_CMD, NPU_CMD_RST_I_WR);
+
+    for (uint32_t i = 0u; i < TL_K_DIM; i++) {
         npu_write_input((uint32_t)features[i]);
     }
 
+    /*
+     * Para cada inferencia, os ponteiros de LEITURA voltam ao inicio e os
+     * acumuladores sao limpos. Isso nao apaga os pesos armazenados.
+     */
     npu_start(NPU_CMD_ACC_CLEAR |
               NPU_CMD_RST_W_RD |
               NPU_CMD_RST_I_RD);
@@ -62,25 +102,4 @@ void tl_run_features(const uint8_t features[])
     }
 
     tl_decode_scores_from_last_row(tl_out_words[3]);
-}
-
-void tl_run_sample(uint32_t sample_idx)
-{
-    uint8_t features[TL_K_DIM];
-
-    tl_last_sample_index   = sample_idx;
-    tl_expected_label_last = tl_expected_labels[sample_idx];
-
-    for (uint32_t i = 0u; i < TL_K_DIM; i++) {
-        features[i] = (uint8_t)(tl_inputs[sample_idx][i] & 0xFFu);
-    }
-
-    tl_run_features(features);
-}
-
-void tl_run_test_suite(void)
-{
-    for (uint32_t i = 0u; i < TL_NUM_TEST_SAMPLES; i++) {
-        tl_run_sample(i);
-    }
 }

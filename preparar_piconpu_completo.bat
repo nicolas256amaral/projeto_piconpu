@@ -47,7 +47,6 @@ set "UART_PACKET_ROOT=%ROOT%\uart_packet.hex"
 set "UART_REPORT_ROOT=%ROOT%\uart_image_report.csv"
 set "FIRMWARE_ROOT=%ROOT%\firmware.hex"
 
-set "NUM_SAMPLES=8"
 set "BOOT_MEM_WORDS=1024"
 
 echo.
@@ -112,8 +111,7 @@ pushd "%DATASET%" >nul
 py "%TRAIN_SCRIPT%" ^
     --dataset "%DATASET%" ^
     --out "%MODEL_DATASET%" ^
-    --preprocess-out "%PREPROCESS_JSON%" ^
-    --samples %NUM_SAMPLES%
+    --preprocess-out "%PREPROCESS_JSON%"
 
 if errorlevel 1 (
     popd >nul
